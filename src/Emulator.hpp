@@ -1,8 +1,9 @@
 #include <bitset>
 #include <filesystem>
+#include <random>
 #include <stack>
 
-#include <SFML/Window.hpp>
+#include <SFML/Graphics.hpp>
 
 namespace Chip8
 {
@@ -32,5 +33,7 @@ namespace Chip8
 
         void update(const float dt, const bool keyPressed, const std::uint8_t key) noexcept;
         void render() noexcept;
+        void handleKeyPress(const sf::Event::KeyPressed &event) noexcept;
+        void handleKeyRelease(const sf::Event::KeyReleased &event) noexcept;
     };
 } // namespace Chip8

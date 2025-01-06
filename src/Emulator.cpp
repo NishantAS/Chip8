@@ -1,9 +1,10 @@
-#include <Emulator.hpp>
-#include <Instruction.hpp>
+#include "Emulator.hpp"
+#include "Instruction.hpp"
 
 #include <SFML/Graphics.hpp>
 
 #include <fstream>
+#include <iostream>
 #include <ranges>
 #include <numeric>
 #include <version>
@@ -54,18 +55,23 @@ Chip8::Emulator::~Emulator() noexcept
 
 bool Chip8::Emulator::LoadRom(const std::filesystem::path &path) noexcept
 {
-    if (!std::filesystem::is_regular_file(path))
+    if (not std::filesystem::is_regular_file(path))
         return false;
 
     std::ifstream rom{path, std::ios::binary};
+    if (rom.is_open())
+    {
 
-    const auto size = std::filesystem::file_size(path);
-    if (size > 4096 - 0x200)
-        return false;
-    else
-        rom.read(reinterpret_cast<char *>(m_Memory.data() + 512), size);
+        const auto size = std::filesystem::file_size(path);
+        if (size > 4096 - 0x200)
+            return false;
+        else
+            rom.read(reinterpret_cast<char *>(m_Memory.data() + 512), size);
 
-    rom.close();
+        rom.close();
+        return true;
+    }
+    return false;
 }
 
 bool Chip8::Emulator::LoadRom(const std::uint8_t *data, std::size_t size) noexcept
@@ -77,6 +83,8 @@ bool Chip8::Emulator::LoadRom(const std::uint8_t *data, std::size_t size) noexce
         return false;
     else
         std::copy(data, data + size, m_Memory.begin() + 0x200);
+
+    return true;
 }
 
 void Chip8::Emulator::Run() noexcept
@@ -91,6 +99,14 @@ void Chip8::Emulator::Run() noexcept
             {
                 m_Window.close();
             }
+            else if (event->is<sf::Event::KeyPressed>())
+            {
+                handleKeyPress(*event->getIf<sf::Event::KeyPressed>());
+            }
+            else if (event->is<sf::Event::KeyReleased>())
+            {
+                handleKeyRelease(*event->getIf<sf::Event::KeyReleased>());
+            }
         }
 
         update(m_Clock.restart().asSeconds(), keyPress, key);
@@ -100,18 +116,21 @@ void Chip8::Emulator::Run() noexcept
 
 void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uint8_t key) noexcept
 {
-    std::uint16_t instruction = m_Memory[m_PC] << 8 | m_Memory[m_PC + 1];
+    std::uint16_t instruction = m_Memory[m_PC] << 8 bitor m_Memory[m_PC + 1];
     m_PC += 2;
     Chip8::Instruction inst{};
-    inst.opcode = (instruction & 0xF00) >> 12;
-    inst.nnn = instruction & 0x0FFF;
-    inst.nn = instruction & 0x00FF;
-    inst.n = instruction & 0x000F;
-    inst.reg.x = (instruction & 0x0F00) >> 8;
-    inst.reg.y = (instruction & 0x00F0) >> 4;
+    inst.opcode = (instruction bitand 0xF000) >> 12;
+    inst.nnn = instruction bitand 0x0FFF;
+    inst.nn = instruction bitand 0x00FF;
+    inst.n = instruction bitand 0x000F;
+    inst.reg.x = (instruction bitand 0x0F00) >> 8;
+    inst.reg.y = (instruction bitand 0x00F0) >> 4;
 
     m_DelayTimer -= dt;
     m_SoundTimer -= dt;
+
+    std::print(std::cout, "PC: {:X}\n", m_PC);
+    std::print(std::cout, "Instruction: {:X}\n", instruction);
 
     if (inst.opcode == 0x0)
     {
@@ -121,6 +140,10 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         {
             m_PC = m_Stack.top();
             m_Stack.pop();
+        }
+        else
+        {
+            std::print(std::cout, "Problem with {:X}\n", instruction);
         }
     }
     else if (inst.opcode == 0x1) // Jump to address nnn
@@ -136,16 +159,22 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
     {
         if (m_Registers[inst.reg.x] == inst.nn)
             m_PC += 2;
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
-    else if (inst.opcode == 0x4) // Skip next inst if Vx != nn
+    else if (inst.opcode == 0x4) // Skip next inst if Vx not_eq nn
     {
-        if (m_Registers[inst.reg.x] != inst.nn)
+        if (m_Registers[inst.reg.x] not_eq inst.nn)
             m_PC += 2;
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
     else if (inst.opcode == 0x5) // Skip next inst if Vx == Vy
     {
         if (m_Registers[inst.reg.x] == m_Registers[inst.reg.y])
             m_PC += 2;
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
     else if (inst.opcode == 0x6) // Set Vx = nn
     {
@@ -162,14 +191,14 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         else if (inst.n == 0x1)
             m_Registers[inst.reg.x] |= m_Registers[inst.reg.y];
         else if (inst.n == 0x2)
-            m_Registers[inst.reg.x] &= m_Registers[inst.reg.y];
+            m_Registers[inst.reg.x] and_eq m_Registers[inst.reg.y];
         else if (inst.n == 0x3)
-            m_Registers[inst.reg.x] ^= m_Registers[inst.reg.y];
+            m_Registers[inst.reg.x] xor_eq m_Registers[inst.reg.y];
         else if (inst.n == 0x4)
         {
             std::uint16_t sum = m_Registers[inst.reg.x] + m_Registers[inst.reg.y];
             m_Registers[0xF] = sum > 0xFF;
-            m_Registers[inst.reg.x] = sum & 0xFF;
+            m_Registers[inst.reg.x] = sum bitand 0xFF;
         }
         else if (inst.n == 0x5)
         {
@@ -178,7 +207,7 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         }
         else if (inst.n == 0x6)
         {
-            m_Registers[0xF] = m_Registers[inst.reg.x] & 0x1;
+            m_Registers[0xF] = m_Registers[inst.reg.x] bitand 0x1;
             m_Registers[inst.reg.x] >>= 1;
         }
         else if (inst.n == 0x7)
@@ -188,14 +217,18 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         }
         else if (inst.n == 0xE)
         {
-            m_Registers[0xF] = m_Registers[inst.reg.x] && 0x80;
+            m_Registers[0xF] = m_Registers[inst.reg.x] bitand 0x80;
             m_Registers[inst.reg.x] <<= 1;
         }
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
     else if (inst.opcode == 0x9)
     {
-        if (m_Registers[inst.reg.x] != m_Registers[inst.reg.y])
+        if (m_Registers[inst.reg.x] not_eq m_Registers[inst.reg.y])
             m_PC += 2;
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
     else if (inst.opcode == 0xA)
     {
@@ -207,7 +240,7 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
     }
     else if (inst.opcode == 0xC)
     {
-        m_Registers[inst.reg.x] = m_RandomEngine() & inst.nn;
+        m_Registers[inst.reg.x] = m_RandomEngine() bitand inst.nn;
     }
     else if (inst.opcode == 0xD)
     {
@@ -220,7 +253,7 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
             auto pixel = m_Memory[m_I + yLine];
             for (std::size_t xLine = 0; xLine < 8; xLine++)
             {
-                if ((pixel & (0x80 >> xLine)) != 0)
+                if ((pixel bitand (0x80 >> xLine)) not_eq 0)
                 {
                     if (m_Display[y + yLine][x + xLine])
                         m_Registers[0xF] = 1;
@@ -235,11 +268,15 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         {
             if (m_Keys[m_Registers[inst.reg.x]])
                 m_PC += 2;
+            else
+                std::print(std::cout, "Problem with {:X}\n", instruction);
         }
         else if (inst.nn == 0xA1)
         {
-            if (!m_Keys[m_Registers[inst.reg.x]])
+            if (not m_Keys[m_Registers[inst.reg.x]])
                 m_PC += 2;
+            else
+                std::print(std::cout, "Problem with {:X}\n", instruction);
         }
     }
     else if (inst.opcode == 0xF)
@@ -260,12 +297,28 @@ void Chip8::Emulator::update(const float dt, const bool keyPress, const std::uin
         else if (inst.nn == 0x1E)
             m_I += m_Registers[inst.reg.x];
         else if (inst.nn == 0x29)
-            m_I = (m_Registers[inst.reg.x] & 0xF) * 5;
+            m_I = (m_Registers[inst.reg.x] bitand 0xF) * 5;
+        else if (inst.nn == 0x33)
+        {
+            m_Memory[m_I] = m_Registers[inst.reg.x] / 100;
+            m_Memory[m_I + 1] = (m_Registers[inst.reg.x] / 10) % 10;
+            m_Memory[m_I + 2] = m_Registers[inst.reg.x] % 10;
+        }
+        else if (inst.nn == 0x55)
+        {
+            for (std::size_t i = 0; i <= inst.reg.x; i++)
+                m_Memory[m_I + i] = m_Registers[i];
+        }
+        else if (inst.nn == 0x65)
+        {
+            for (std::size_t i = 0; i <= inst.reg.x; i++)
+                m_Registers[i] = m_Memory[m_I + i];
+        }
+        else
+            std::print(std::cout, "Problem with {:X}\n", instruction);
     }
     else
-    {
-        // TODO: Implement the rest of the inst
-    }
+        std::print(std::cout, "Problem with {:X}\n", instruction);
 }
 
 void Chip8::Emulator::render() noexcept
@@ -285,4 +338,78 @@ void Chip8::Emulator::render() noexcept
             }
         }
     }
+
+    m_Window.display();
+}
+
+void Chip8::Emulator::handleKeyPress(const sf::Event::KeyPressed &event) noexcept
+{
+    if (event.code == sf::Keyboard::Key::Num0 or event.code == sf::Keyboard::Key::Numpad0)
+        m_Keys[0] = true;
+    else if (event.code == sf::Keyboard::Key::Num1 or event.code == sf::Keyboard::Key::Numpad1)
+        m_Keys[1] = true;
+    else if (event.code == sf::Keyboard::Key::Num2 or event.code == sf::Keyboard::Key::Numpad2)
+        m_Keys[2] = true;
+    else if (event.code == sf::Keyboard::Key::Num3 or event.code == sf::Keyboard::Key::Numpad3)
+        m_Keys[3] = true;
+    else if (event.code == sf::Keyboard::Key::Num4 or event.code == sf::Keyboard::Key::Numpad4)
+        m_Keys[4] = true;
+    else if (event.code == sf::Keyboard::Key::Num5 or event.code == sf::Keyboard::Key::Numpad5)
+        m_Keys[5] = true;
+    else if (event.code == sf::Keyboard::Key::Num6 or event.code == sf::Keyboard::Key::Numpad6)
+        m_Keys[6] = true;
+    else if (event.code == sf::Keyboard::Key::Num7 or event.code == sf::Keyboard::Key::Numpad7)
+        m_Keys[7] = true;
+    else if (event.code == sf::Keyboard::Key::Num8 or event.code == sf::Keyboard::Key::Numpad8)
+        m_Keys[8] = true;
+    else if (event.code == sf::Keyboard::Key::Num9 or event.code == sf::Keyboard::Key::Numpad9)
+        m_Keys[9] = true;
+    else if (event.code == sf::Keyboard::Key::A)
+        m_Keys[10] = true;
+    else if (event.code == sf::Keyboard::Key::B)
+        m_Keys[11] = true;
+    else if (event.code == sf::Keyboard::Key::C)
+        m_Keys[12] = true;
+    else if (event.code == sf::Keyboard::Key::D)
+        m_Keys[13] = true;
+    else if (event.code == sf::Keyboard::Key::E)
+        m_Keys[14] = true;
+    else if (event.code == sf::Keyboard::Key::F)
+        m_Keys[15] = true;
+}
+
+void Chip8::Emulator::handleKeyRelease(const sf::Event::KeyReleased &event) noexcept
+{
+    if (event.code == sf::Keyboard::Key::Num0 or event.code == sf::Keyboard::Key::Numpad0)
+        m_Keys[0] = false;
+    else if (event.code == sf::Keyboard::Key::Num1 or event.code == sf::Keyboard::Key::Numpad1)
+        m_Keys[1] = false;
+    else if (event.code == sf::Keyboard::Key::Num2 or event.code == sf::Keyboard::Key::Numpad2)
+        m_Keys[2] = false;
+    else if (event.code == sf::Keyboard::Key::Num3 or event.code == sf::Keyboard::Key::Numpad3)
+        m_Keys[3] = false;
+    else if (event.code == sf::Keyboard::Key::Num4 or event.code == sf::Keyboard::Key::Numpad4)
+        m_Keys[4] = false;
+    else if (event.code == sf::Keyboard::Key::Num5 or event.code == sf::Keyboard::Key::Numpad5)
+        m_Keys[5] = false;
+    else if (event.code == sf::Keyboard::Key::Num6 or event.code == sf::Keyboard::Key::Numpad6)
+        m_Keys[6] = false;
+    else if (event.code == sf::Keyboard::Key::Num7 or event.code == sf::Keyboard::Key::Numpad7)
+        m_Keys[7] = false;
+    else if (event.code == sf::Keyboard::Key::Num8 or event.code == sf::Keyboard::Key::Numpad8)
+        m_Keys[8] = false;
+    else if (event.code == sf::Keyboard::Key::Num9 or event.code == sf::Keyboard::Key::Numpad9)
+        m_Keys[9] = false;
+    else if (event.code == sf::Keyboard::Key::A)
+        m_Keys[10] = false;
+    else if (event.code == sf::Keyboard::Key::B)
+        m_Keys[11] = false;
+    else if (event.code == sf::Keyboard::Key::C)
+        m_Keys[12] = false;
+    else if (event.code == sf::Keyboard::Key::D)
+        m_Keys[13] = false;
+    else if (event.code == sf::Keyboard::Key::E)
+        m_Keys[14] = false;
+    else if (event.code == sf::Keyboard::Key::F)
+        m_Keys[15] = false;
 }
